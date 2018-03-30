@@ -69,6 +69,7 @@ from datetime import datetime
 import os
 import sys
 import threading
+import random
 
 import six
 import numpy as np
@@ -273,13 +274,13 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
         sys.stdout.flush()
         shard_counter = 0
     print('%s [thread %d]: Wrote %d images to %d shards.' %
-          (datetime.now(), thread_index, counter, num_files_in_thread))
+          (datetime.now(), thread_index, counter, num_shards_per_batch))
     sys.stdout.flush()
 
 
-def _process_image_files(name, filenames, labels, humans, num_shards,
-                         synsets=None, bboxes=None, output_directory='/tmp',
-                         num_threads=2):
+def create_tfrecords(name, filenames, labels, humans, num_shards,
+                     synsets=None, bboxes=None, output_dir='/tmp',
+                     num_threads=2):
     """Process and save list of images as TFRecord of Example protos.
 
     Args:
@@ -296,7 +297,7 @@ def _process_image_files(name, filenames, labels, humans, num_shards,
             this list might contain from 0+ entries corresponding to the number
             of bounding box annotations for the image. Can be None or an empty
             list to not use bounding boxes
-        output_directory: str; The path to store the output sharded data
+        output_dir: str; The path to store the output sharded data
         num_threads: int; How many threads to spin up to load the images.
     """
     if bboxes is None:
@@ -329,7 +330,7 @@ def _process_image_files(name, filenames, labels, humans, num_shards,
     threads = []
     for thread_index in range(len(ranges)):
         args = (coder, thread_index, ranges, name, filenames,
-                humans, labels, num_shards)
+                synsets, humans, labels, bboxes, num_shards, output_dir)
         t = threading.Thread(target=_process_image_files_thread, args=args)
         t.start()
         threads.append(t)
@@ -339,3 +340,81 @@ def _process_image_files(name, filenames, labels, humans, num_shards,
     print('%s: Finished writing all %d images in data set.' %
           (datetime.now(), len(filenames)))
     sys.stdout.flush()
+
+
+def find_image_files(data_dir, label_order=None):
+    """Build a list of all images files and labels in the data set.
+
+    Args:
+        data_dir: string, path to the root directory of images.
+            Assumes that the image data set resides in JPEG files located in
+            the following directory structure.
+
+                data_dir/dog/another-image.JPEG
+                data_dir/dog/my-image.jpg
+
+            where 'dog' is the label associated with these images.
+        label_order: list or str or None; indicates the order for which the
+            labels should be enumerated. If None, will use alphabetical order on
+            the data_dir. If a list, will use that, if a str, will interpret as
+            a filename.
+
+    Returns:
+        filenames: list of strings; each string is a path to an image file.
+        texts: list of strings; each string is the class, e.g. 'dog'
+        labels: list of integer; each integer identifies the ground truth.
+    """
+    print('Determining list of input files and labels from %s.' % data_dir)
+    if label_order is None:
+        label_order = os.listdir(data_dir)
+    elif isinstance(label_order, str):
+        label_order = [l.strip() for l in tf.gfile.FastGFile(
+            label_order, 'r').readlines()]
+    elif isinstance(label_order, tuple) or isinstance(label_order, list):
+        pass
+    else:
+        raise ValueError("Unkown parameter type label_order")
+
+    # Make sure each label is a directory
+    for label in label_order:
+        if not os.path.isdir(os.path.join(data_dir, label)):
+            print('{} not found as a directory in the data_dir'.format(label) +
+                  '. Dropping')
+            label_order.remove(label)
+
+    labels = []
+    filenames = []
+    texts = []
+
+    # Leave label index 0 empty as a background class.
+    label_index = 1
+
+    # Construct the list of JPEG files and labels.
+    for text in label_order:
+        jpeg_file_path = '%s/%s/*' % (data_dir, text)
+        matching_files = tf.gfile.Glob(jpeg_file_path)
+
+        labels.extend([label_index] * len(matching_files))
+        texts.extend([text] * len(matching_files))
+        filenames.extend(matching_files)
+
+        if not label_index % 100:
+            print('Finished finding files in %d of %d classes.' % (
+                label_index, len(labels)))
+        label_index += 1
+
+    # Shuffle the ordering of all image files in order to guarantee
+    # random ordering of the images with respect to label in the
+    # saved TFRecord files. Make the randomization repeatable.
+    shuffled_index = list(range(len(filenames)))
+    random.seed(12345)
+    random.shuffle(shuffled_index)
+
+    filenames = [filenames[i] for i in shuffled_index]
+    texts = [texts[i] for i in shuffled_index]
+    labels = [labels[i] for i in shuffled_index]
+
+    print('Found %d JPEG files across %d labels inside %s.' %
+          (len(filenames), len(label_order), data_dir))
+
+    return filenames, texts, labels
