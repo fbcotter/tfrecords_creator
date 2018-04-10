@@ -1,66 +1,3 @@
-# Copyright 2016 Google Inc. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#           http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
-"""Converts image data to TFRecords file format with Example protos.
-
-The image data set is expected to reside in JPEG files located in the
-following directory structure.
-
-    data_dir/label_0/image0.jpeg
-    data_dir/label_0/image1.jpg
-    ...
-    data_dir/label_1/weird-image.jpeg
-    data_dir/label_1/my-image.jpeg
-    ...
-
-where the sub-directory is the unique label associated with these images.
-
-This TensorFlow script converts the training and evaluation data into
-a sharded data set consisting of TFRecord files
-
-    train_directory/train-00000-of-01024
-    train_directory/train-00001-of-01024
-    ...
-    train_directory/train-01023-of-01024
-
-and
-
-    validation_directory/validation-00000-of-00128
-    validation_directory/validation-00001-of-00128
-    ...
-    validation_directory/validation-00127-of-00128
-
-where we have selected 1024 and 128 shards for each data set. Each record
-within the TFRecord file is a serialized Example proto. The Example proto
-contains the following fields:
-
-    image/encoded: string containing JPEG encoded image in RGB colorspace
-    image/height: integer, image height in pixels
-    image/width: integer, image width in pixels
-    image/colorspace: string, specifying the colorspace, always 'RGB'
-    image/channels: integer, specifying the number of channels, always 3
-    image/format: string, specifying the format, always 'JPEG'
-    image/filename: string containing the basename of the image file
-        e.g. 'n01440764_10026.JPEG' or 'ILSVRC2012_val_00000293.JPEG'
-    image/class/label: integer specifying the index in a classification layer.
-        The label ranges from [0, num_labels] where 0 is unused and left as
-        the background class.
-    image/class/text: string specifying the human-readable version of the label
-        e.g. 'dog'
-
-If your data set involves bounding boxes, please look at build_imagenet_data.py.
-"""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -74,6 +11,8 @@ import random
 import six
 import numpy as np
 import tensorflow as tf
+IMG_TYPES = ['*.jpg', '*.jpeg', '*.png',
+             '*.JPG', '*.JPEG', '*.PNG']
 
 
 def _int64_feature(value):
@@ -391,8 +330,10 @@ def find_image_files(data_dir, label_order=None):
 
     # Construct the list of JPEG files and labels.
     for text in label_order:
-        jpeg_file_path = '%s/%s/*' % (data_dir, text)
-        matching_files = tf.gfile.Glob(jpeg_file_path)
+        matching_files = []
+        for files in IMG_TYPES:
+            jpeg_file_path = '%s/%s/%s' % (data_dir, text, files)
+            matching_files.extend(tf.gfile.Glob(jpeg_file_path))
 
         labels.extend([label_index] * len(matching_files))
         texts.extend([text] * len(matching_files))
