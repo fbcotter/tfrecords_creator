@@ -14,6 +14,7 @@ def setup():
     if not os.path.isdir(dest_dir):
         os.mkdir(dest_dir)
 
+
 def test_find(capsys):
     data_dir = os.path.join(TEST_BASE, 'example_ds1')
     filenames, texts, labels = find_image_files(data_dir)
@@ -51,9 +52,10 @@ def test_createloadtrain():
     filenames, texts, labels = find_image_files(data_dir)
     dest_dir = os.path.join(TEST_BASE, 'example_ds1_tfrecords')
 
-    #  create_tfrecords('train', filenames, labels, texts,
-                     #  num_shards=4, output_dir=dest_dir,
-                     #  num_threads=2)
+    # Create the records if they weren't already there.
+    create_tfrecords('train', filenames, labels, texts,
+                     num_shards=4, output_dir=dest_dir,
+                     num_threads=2)
 
     assert len(os.listdir(dest_dir)) == 4
 
@@ -63,3 +65,24 @@ def test_createloadtrain():
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         x,y,t = sess.run((images, labels, texts))
+
+
+@pytest.mark.parametrize("num_shards, num_threads",
+                         [(2,2)])
+def test_bboxes(num_shards, num_threads):
+    pass
+    #  data_dir = os.path.join(TEST_BASE, 'example_ds1')
+    #  filenames, texts, labels = find_image_files(data_dir)
+    #  dest_dir = os.path.join(TEST_BASE, 'example_ds1_tfrecords')
+
+    #  # Remove the old files in the dest_dir
+    #  for file in os.listdir(dest_dir):
+        #  file_path = os.path.join(dest_dir, file)
+        #  if os.path.isfile(file_path) and 'train' in file:
+            #  os.unlink(file_path)
+
+    #  create_tfrecords('train', filenames, labels, texts,
+                     #  num_shards=num_shards, output_dir=dest_dir,
+                     #  num_threads=num_threads)
+
+    #  assert len(os.listdir(dest_dir)) == num_shards
