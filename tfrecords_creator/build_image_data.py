@@ -36,8 +36,8 @@ def _bytes_feature(value):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
 
-def _convert_to_example(filename, image_buffer, label, synset, human, bbox,
-                        height, width):
+def _convert_to_example(filename, image_buffer, img_label, synset, human,
+                        bbox_coords, bbox_labels, height, width):
     """Build an Example proto for an example.
 
     Args:
@@ -47,9 +47,9 @@ def _convert_to_example(filename, image_buffer, label, synset, human, bbox,
         synset: string, unique WordNet ID specifying the label, e.g.,
             'n02323233'
         human: string, human-readable label, e.g., 'red fox, Vulpes vulpes'
-        bbox: list of bounding boxes; each box is a list of integers
-            specifying [xmin, ymin, xmax, ymax]. All boxes are assumed to belong
-            to the same label as the image label.
+        bbox_coords: list of bounding boxes; each box is a list of floats
+            specifying [xmin, ymin, xmax, ymax].
+        bbox_labels: list of bounding box labels.
         height: integer, image height in pixels
         width: integer, image width in pixels
     Returns:
@@ -59,11 +59,12 @@ def _convert_to_example(filename, image_buffer, label, synset, human, bbox,
     ymin = []
     xmax = []
     ymax = []
-    for b in bbox:
+    # Split the bounding boxes into 4 separate lists
+    for b in bbox_coords:
         assert len(b) == 4
-        # pylint: disable=expression-not-assigned
         [l.append(point) for l, point in zip([xmin, ymin, xmax, ymax], b)]
-        # pylint: enable=expression-not-assigned
+
+    assert len(xmin) == len(bbox_labels)
 
     colorspace = 'RGB'
     channels = 3
@@ -74,14 +75,15 @@ def _convert_to_example(filename, image_buffer, label, synset, human, bbox,
         'image/width': _int64_feature(width),
         'image/colorspace': _bytes_feature(colorspace),
         'image/channels': _int64_feature(channels),
-        'image/class/label': _int64_feature(label),
+        'image/class/label': _int64_feature(img_label),
         'image/class/synset': _bytes_feature(synset),
         'image/class/text': _bytes_feature(human),
+        'image/object/number': _int64_feature(len(xmin)),
         'image/object/bbox/xmin': _float_feature(xmin),
         'image/object/bbox/xmax': _float_feature(xmax),
         'image/object/bbox/ymin': _float_feature(ymin),
         'image/object/bbox/ymax': _float_feature(ymax),
-        'image/object/bbox/label': _int64_feature([label] * len(xmin)),
+        'image/object/bbox/label': _int64_feature(bbox_labels),
         'image/format': _bytes_feature(image_format),
         'image/filename': _bytes_feature(os.path.basename(filename)),
         'image/encoded': _bytes_feature(image_buffer)}))
@@ -132,9 +134,54 @@ def _process_image(filename, coder):
     return image_data, height, width
 
 
+def _parse_bbox_info(bboxes, filename, enumeration, height, width):
+    file = os.path.basename(filename)
+    entry = None
+    bbox_labels = []
+    bbox_coords = []
+    if filename in bboxes.keys():
+        entry = bboxes[filename]
+    if file in bboxes.keys():
+        entry = bboxes[file]
+
+    if entry is not None:
+        # entry['labels'] could be a list of folder names, or a list of
+        # integers. If it is the former, need to map these to the correct
+        # integer labels.
+        bbox_labels = [enumeration[x] if isinstance(x, str) else x for x in
+                       entry['labels']]
+
+        # enrty['bboxes'] could be a list of floats or integers. If a list of
+        # integers, need to map these to the range [0,1]
+        bbox_coords = []
+        for box in entry['bboxes']:
+            if isinstance(box[0], float):
+                bbox_coords.append(box)
+            else:
+                xmin = box[0] / width
+                ymin = box[1] / height
+                xmax = box[2] / width
+                ymax = box[3] / height
+                # Sometimes xmax < xmin. Check for this. Also ensure that the
+                # bounds does not go outside the image
+                min_x = min(xmin, xmax)
+                max_x = max(xmin, xmax)
+                min_x = min(max(min_x, 0.0), 1.0)
+                max_x = min(max(max_x, 0.0), 1.0)
+
+                min_y = min(ymin, ymax)
+                max_y = max(ymin, ymax)
+                min_y = min(max(min_y, 0.0), 1.0)
+                max_y = min(max(max_y, 0.0), 1.0)
+
+                bbox_coords.append([min_x, min_y, max_x, max_y])
+
+    return bbox_coords, bbox_labels
+
+
 def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
-                                synsets, humans, labels, bboxes, num_shards,
-                                output_directory):
+                                texts, text_mappings, labels, bboxes,
+                                num_shards, output_directory, enumeration=None):
     """Processes and saves list of images as a TFRecord shard. This is the thread
     function that handlels 1 or more shards.
 
@@ -146,8 +193,9 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
             analyze in parallel.
         name: string, unique identifier specifying the data set
         filenames: list of strings; each string is a path to an image file
-        synsets: list of strings; each string is a unique WordNet ID.
-        humans: list of strings; each string is human readable, e.g. 'dog'
+        texts: list of strings; each string is human readable, e.g. 'dog'
+        text_mappings: Dictionary to map folder names to some other text (e.g.
+            to map wordnet IDs to their descriptions.
         labels: list of integer; each integer identifies the ground truth
         bboxes: list of bounding boxes for each image. Note that each entry in
             this list might contain from 0+ entries corresponding to the number
@@ -183,9 +231,12 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
         for i in files_in_shard:
             filename = filenames[i]
             label = labels[i]
-            synset = synsets[i]
-            human = humans[i]
-            bbox = bboxes[i]
+            if texts[i] in text_mappings.keys():
+                synset = texts[i]
+                human = text_mappings[synset]
+            else:
+                synset = texts[i]
+                human = texts[i]
 
             try:
                 image_buffer, height, width = _process_image(filename, coder)
@@ -194,9 +245,11 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
                 print('SKIPPED: Unexpected error while decoding %s.' % filename)
                 continue
 
+            bbox_coords, bbox_labels = _parse_bbox_info(
+                bboxes, filename, enumeration, height, width)
             example = _convert_to_example(filename, image_buffer, label,
-                                          synset, human, bbox,
-                                          height, width)
+                                          synset, human, bbox_coords,
+                                          bbox_labels, height, width)
             writer.write(example.SerializeToString())
             shard_counter += 1
             counter += 1
@@ -217,37 +270,39 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
     sys.stdout.flush()
 
 
-def create_tfrecords(name, filenames, labels, humans, num_shards,
-                     synsets=None, bboxes=None, output_dir='/tmp',
-                     num_threads=2):
+def create_tfrecords(name, filenames, texts, labels, text_mappings=None,
+                     num_shards=2, num_threads=2, bboxes=None,
+                     enumeration=None, output_dir='/tmp'):
     """Process and save list of images as TFRecord of Example protos.
 
     Args:
         name: string, unique identifier specifying the data set. E.g. train or
             val
         filenames: list of strings; each string is a path to an image file
-        synsets: list of strings; each string is a unique WordNet ID. If you're
-            not using ImageNet, can just be a list of the class strings for each
-            image.
+        texts: list of strings; each string is a human-readable label
         labels: list of integer; each integer identifies the ground truth
-        humans: list of strings; each string is a human-readable label
+        text_mappings: Dictionary to map folder names to some other text (e.g.
+            to map wordnet IDs to their descriptions.
         num_shards: integer number of shards for this data set.
-        bboxes: list of bounding boxes for each image. Note that each entry in
-            this list might contain from 0+ entries corresponding to the number
-            of bounding box annotations for the image. Can be None or an empty
-            list to not use bounding boxes
-        output_dir: str; The path to store the output sharded data
         num_threads: int; How many threads to spin up to load the images.
+        bboxes: dictionary of bounding boxes for the images. The keys of this
+            dictionary indicate the image names (either their full path or just
+            their filename if this is unique). Each item in this dictionary is
+            again a dictionary of two keys, 'labels' - a list of labels for each
+            bbox, and 'bboxes' - a list of coordinates for each bbox. Note that
+            each entry in this list might contain from 0+ entries corresponding
+            to the number of bounding box annotations for the image. Can be None
+            to not use bboxes.
+        enumeration: dict mapping strings to integers
+        output_dir: str; The path to store the output sharded data
     """
+    if text_mappings is None:
+        text_mappings = {}
     if bboxes is None:
-        bboxes = [[] for _ in range(len(labels))]
-    if synsets is None:
-        synsets = ['' for _ in range(len(labels))]
+        bboxes = {}
 
-    assert len(filenames) == len(synsets)
-    assert len(filenames) == len(humans)
+    assert len(filenames) == len(texts)
     assert len(filenames) == len(labels)
-    assert len(filenames) == len(bboxes)
 
     # Break all images into batches with a [ranges[i][0], ranges[i][1]].
     spacing = np.linspace(0, len(filenames), num_threads + 1).astype(np.int)
@@ -259,6 +314,9 @@ def create_tfrecords(name, filenames, labels, humans, num_shards,
     print('Launching %d threads for spacings: %s' % (num_threads, ranges))
     sys.stdout.flush()
 
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
     # Create a mechanism for monitoring when all threads are finished.
     coord = tf.train.Coordinator()
 
@@ -269,7 +327,8 @@ def create_tfrecords(name, filenames, labels, humans, num_shards,
     threads = []
     for thread_index in range(len(ranges)):
         args = (coder, thread_index, ranges, name, filenames,
-                synsets, humans, labels, bboxes, num_shards, output_dir)
+                texts, text_mappings, labels, bboxes, num_shards, output_dir,
+                enumeration)
         t = threading.Thread(target=_process_image_files_thread, args=args)
         t.start()
         threads.append(t)
@@ -295,15 +354,18 @@ def find_image_files(data_dir, label_order=None):
             where 'dog' is the label associated with these images.
         label_order: list or str or None; indicates the order for which the
             labels should be enumerated. If None, will use alphabetical order on
-            the data_dir. If a list, will use that, if a str, will interpret as
-            a filename.
+            the data_dir. If a list, will use that as the order. Can also be a
+            dict, with key, val pairs giving the mapping from string to integer.
 
     Returns:
         filenames: list of strings; each string is a path to an image file.
         texts: list of strings; each string is the class, e.g. 'dog'
         labels: list of integer; each integer identifies the ground truth.
+        enumeration: mapping from folder names to label integers
     """
     print('Determining list of input files and labels from %s.' % data_dir)
+
+    special_order = False
     if label_order is None:
         label_order = os.listdir(data_dir)
     elif isinstance(label_order, str):
@@ -311,6 +373,9 @@ def find_image_files(data_dir, label_order=None):
             label_order, 'r').readlines()]
     elif isinstance(label_order, tuple) or isinstance(label_order, list):
         pass
+    elif isinstance(label_order, dict):
+        enumeration = label_order
+        special_order = True
     else:
         raise ValueError("Unkown parameter type label_order")
 
@@ -326,23 +391,35 @@ def find_image_files(data_dir, label_order=None):
     texts = []
 
     # Leave label index 0 empty as a background class.
-    label_index = 1
+    if not special_order:
+        enumeration = {'n/a': 0}
 
     # Construct the list of JPEG files and labels.
-    for text in label_order:
+    for idx, text in enumerate(label_order):
         matching_files = []
         for files in IMG_TYPES:
             jpeg_file_path = '%s/%s/%s' % (data_dir, text, files)
             matching_files.extend(tf.gfile.Glob(jpeg_file_path))
+            # Add files that are in an images subfolder of the dataset
+            try:
+                jpeg_file_path2 = '%s/%s/images/%s' % (data_dir, text, files)
+                matching_files.extend(tf.gfile.Glob(jpeg_file_path2))
+            except tf.errors.NotFoundError:
+                pass
 
+        if special_order:
+            label_index = enumeration[text]
+        else:
+            label_index = idx + 1
+
+        enumeration[text] = label_index
         labels.extend([label_index] * len(matching_files))
         texts.extend([text] * len(matching_files))
         filenames.extend(matching_files)
 
-        if not label_index % 100:
+        if not idx % 100:
             print('Finished finding files in %d of %d classes.' % (
-                label_index, len(labels)))
-        label_index += 1
+                idx, len(labels)))
 
     # Shuffle the ordering of all image files in order to guarantee
     # random ordering of the images with respect to label in the
@@ -358,4 +435,4 @@ def find_image_files(data_dir, label_order=None):
     print('Found %d JPEG files across %d labels inside %s.' %
           (len(filenames), len(label_order), data_dir))
 
-    return filenames, texts, labels
+    return filenames, texts, labels, enumeration

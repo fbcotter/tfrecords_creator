@@ -30,10 +30,11 @@ assumes you have folders of images organized as follows::
     │   │   ├── train_image_0003.jpg
     │   │   └── train_image_0004.jpg
     │   ├── label3
-    │   │   ├── train_image_0001.jpg
-    │   │   ├── train_image_0002.jpg
-    │   │   ├── train_image_0003.jpg
-    │   │   └── train_image_0004.jpg
+    │   │   └── images
+    │   │       ├── train_image_0001.jpg
+    │   │       ├── train_image_0002.jpg
+    │   │       ├── train_image_0003.jpg
+    │   │       └── train_image_0004.jpg
     │   ├── ...
     │ 
     └── val
@@ -53,14 +54,18 @@ We see the hierarchy is as follows:
    'dog', 'cat', 'car', ...) or can be WordNet identifiers (as is the case in
    ImageNet, e.g. 'n01737021', 'n02091831', ...).
 3. Inside each folder there is a collection of images belonging to the same
-   class. Each image must have an extension like ".jpg", ".jpeg" or ".png"
+   class. Each image must have an extension like ".jpg", ".jpeg" or ".png".
+   These should either be directly below the class folder, or in a sub-folder
+   called 'images' (as is the case for the `tiny-imagenet`__ dataset).
+
+__ https://tiny-imagenet.herokuapp.com/
 
 TFRecord Format
 ~~~~~~~~~~~~~~~
 Taking a look at the function `_convert_to_example` in `build_image_data.py` we
 can see the format of the saved images:
 
-.. code::python
+.. code:: python
 
     example = tf.train.Example(features=tf.train.Features(feature={
         'image/height': _int64_feature(height),
@@ -107,11 +112,12 @@ Let us call the path to the dataset DATADIR. Say we want to put the dataset in
 OUTDIR. The simplest thing to do would be to put it all in a single shard. Then
 the code to run would be:
 
-.. code::python
+.. code:: python
     
     from build_image_data import find_image_files, create_tfrecords
-    filenames, texts, labels = find_image_files(DATADIR)
-    create_tfrecords('train', filenames, labels, texts, output_dir=OUTDIR)
+    filenames, texts, labels, enumeration = find_image_files(DATADIR)
+    create_tfrecords('train', filenames, texts, labels, output_dir=OUTDIR)
+
 
 The 'train' string as the first argument is the prefix on the output shards. Of
 course this could be whatever you choose it to be. So our output directory would
@@ -127,10 +133,10 @@ writing of the dataset, we can use multiple threads to write these files as
 well. For simplicity, one thread can only write an integer number of shards. Now
 we can expand the above example by trying:
 
-.. code::python
+.. code:: python
     
     from build_image_data import find_image_files, create_tfrecords
-    filenames, texts, labels = find_image_files(DATADIR)
+    filenames, texts, labels, enumeration = find_image_files(DATADIR)
     create_tfrecords('train', filenames, labels, texts, output_dir=OUTDIR,
     num_shards=4, num_threads=2)
 
@@ -155,15 +161,60 @@ do these things.
    3. If we want to change this, we can manually create the order in a list and
    pass it to the `find_image_files` function. I.e.
 
-   .. code::python
+   .. code:: python
         
        from build_image_data import find_image_files, create_tfrecords
        label_order = ['emu', 'cat', 'dog']
-       filenames, texts, labels = find_image_files(DATADIR, label_order)
-       create_tfrecords('train', filenames, labels, texts, output_dir=OUTDIR,
-       num_shards=4, num_threads=2)
+       filenames, texts, labels, enumeration = find_image_files(DATADIR, label_order)
+       print(enumeration)
+       # Prints: {'n/a': 0, 'emu': 1, 'cat': 2, 'dog': 3}
+       create_tfrecords('train', filenames, texts, labels, output_dir=OUTDIR,
+           num_shards=4, num_threads=2)
+
+   Here we've specified the order as a list. The enumeration return value then
+   gives the mapping from folder name to label. We can specify this directly
+   ourselves by providing a dictionary instead.
+
+   .. code:: python
+        
+       from build_image_data import find_image_files, create_tfrecords
+       label_order = {'emu': 2, 'cat': 3, 'dog': 1}
+       filenames, texts, labels, enumeration = find_image_files(DATADIR, label_order)
+       print(enumeration)
+       # Prints: {'emu': 2, 'cat': 3, 'dog': 1}
 
 2. Using WordNet
+   blah
+
+3. Bounding Boxes
+   Bounding boxes can be saved in a large number of different formats. For
+   simplicity, we leave the parsing of the bounding box raw data up to the user.
+   If the data is to be saved alongside the image, it must be given to the
+   `create_tfrecords` function in a specific format, e.g.:
+
+   .. code:: python
+
+       bboxes = {'img1_name': {
+                    'labels': [obj1_label, obj2_label, ojb3_label],
+                    'bboxes': [[xmin1, ymin1, xmax1, ymax1],
+                               [xmin2, ymin2, xmax2, ymax2],
+                               [xmin3, ymin3, xmax3, ymax3]]
+                   },
+                 'img2_name': {
+                     ...
+                 }
+       }
+
+    There is some flexibility on the exact format of the fields:
+    
+    - The first level dictionary keys ('img1_name', 'img2_name') can be either
+      unique names or the full path to the image file.
+    - The labels can either be integers or strings. If strings, will assume they
+      match the folder names, and the label_order field will be used to map
+      these to the correct integers.
+    - The bounding box lists can either be floats in the range of 0 to 1, or
+      integers representing the pixel values. Pixel values will by default be
+      converted to floats in the range 0 to 1.
 
 Tests
 -----
