@@ -184,7 +184,21 @@ do these things.
        # Prints: {'emu': 2, 'cat': 3, 'dog': 1}
 
 2. Using WordNet
-   blah
+   If you are using WordNet folder names, or for any other reason you want to
+   map your directory names to other text labels, then you can do this with
+   a simple dictionoary
+
+   .. code:: python
+        
+       from build_image_data import find_image_files, create_tfrecords
+       filenames, texts, labels, enumeration = find_image_files(DATADIR)
+       text_mappings = {'emu': 'Big Australian Bird', 'cat': 'Feline', 
+           'dog': 'woofer'}
+       create_tfrecords('train', filenames, texts, labels,
+           text_mappings=text_mappings, output_dir=OUTDIR)
+
+   Now when you load the data, the 'text' field will be 'Big Australian Bird',
+   and the 'synset' field will be 'emu'. 
 
 3. Bounding Boxes
    Bounding boxes can be saved in a large number of different formats. For
@@ -221,3 +235,13 @@ Tests
 
 Loading from TFRecords
 ----------------------
+
+   .. code:: python
+        
+       from build_image_data import read_shards
+       tfrecords_files = [os.path.join(DEST_DIR, x) for x in
+           os.listdir(DEST_DIR)]
+       preprocessor = lambda x: tf.image.resize_images(x, [224,224])
+       examples = read_shards(tfrecords_files, preprocessor, batch_size=64)
+
+

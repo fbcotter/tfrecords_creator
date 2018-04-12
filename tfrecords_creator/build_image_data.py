@@ -216,6 +216,8 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
                                num_shards_per_batch + 1).astype(int)
     num_files_in_thread = ranges[thread_index][1] - ranges[thread_index][0]
 
+    # Print out the maximum number of bboxes seen
+    max_bboxes = 0
     counter = 0
     for s in range(num_shards_per_batch):
         # Generate a sharded version of the file name, e.g.
@@ -245,8 +247,12 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
                 print('SKIPPED: Unexpected error while decoding %s.' % filename)
                 continue
 
+            # Get the bounding box info from the dict passed.
             bbox_coords, bbox_labels = _parse_bbox_info(
                 bboxes, filename, enumeration, height, width)
+            if len(bbox_coords) > max_bboxes:
+                max_bboxes = len(bbox_coords)
+
             example = _convert_to_example(filename, image_buffer, label,
                                           synset, human, bbox_coords,
                                           bbox_labels, height, width)
@@ -267,6 +273,9 @@ def _process_image_files_thread(coder, thread_index, ranges, name, filenames,
         shard_counter = 0
     print('%s [thread %d]: Wrote %d images to %d shards.' %
           (datetime.now(), thread_index, counter, num_shards_per_batch))
+    sys.stdout.flush()
+    print('%s [thread %d]: Maximum bbox length for this thread was %d' %
+          (datetime.now(), thread_index, max_bboxes))
     sys.stdout.flush()
 
 

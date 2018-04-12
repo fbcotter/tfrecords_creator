@@ -43,7 +43,7 @@ def record_parser(value, preprocessor=None, max_classes=-1):
     image = tf.image.decode_jpeg(parsed['image/encoded'], channels=3)
     image = tf.image.convert_image_dtype(image, dtype=tf.float32)
 
-    #  height, width = parsed['image/height'], parsed['image/width']
+    height, width = parsed['image/height'], parsed['image/width']
     if preprocessor is not None:
         image = preprocessor(image)
 
@@ -64,14 +64,25 @@ def record_parser(value, preprocessor=None, max_classes=-1):
 
     bbox_labels = tf.sparse_tensor_to_dense(parsed['image/object/bbox/label'])
 
-    return image, label, text, synset, num_bboxes, bbox_coords, bbox_labels
+    return (image, height, width, label, text,
+            synset, num_bboxes, bbox_coords, bbox_labels)
 
 
 class Examples(object):
-    def __init__(self, dataset, batch_size, max_bboxes=20):
+    """
+    Returns a batch of data from a tfrecords file.
+
+    For variable length items like the number of bboxes in an image, need to pad
+    out the data to make it all fit in a batch. To do this, we specify the max
+    number of likely bboxes to expect. If this is too small, a runtime error
+    will be thrown later on.
+    """
+    def __init__(self, dataset, batch_size, max_bboxes=None):
         self.max_bboxes = max_bboxes
         self.batch_size = batch_size
         img_shape = [None, None, 3]
+        height_shape = []
+        width_shape = []
         label_shape = []
         text_shape = []
         synset_shape = []
@@ -79,23 +90,64 @@ class Examples(object):
         bbox_shape = [max_bboxes, 4]
         bbox_label_shape = [max_bboxes]
 
-        self.padded_shapes = (img_shape, label_shape, text_shape, synset_shape,
-                              num_bbox_shape, bbox_shape, bbox_label_shape)
+        self.padded_shapes = (img_shape, height_shape, width_shape, label_shape,
+                              text_shape, synset_shape, num_bbox_shape,
+                              bbox_shape, bbox_label_shape)
 
         dataset = dataset.padded_batch(self.batch_size, self.padded_shapes)
         iterator = dataset.make_one_shot_iterator()
-        images, labels, texts, synsets, num_bboxes, bbox_coords, bbox_labels = iterator.get_next()
-        self.images = images
-        self.labels = labels
-        self.texts = texts
-        self.synsets = synsets
-        self.num_bboxes = num_bboxes
-        self.bbox_coords = bbox_coords
-        self.bbox_labels = bbox_labels
+
+        item = iterator.get_next()
+
+        self._images = item[0]
+        self._heights = item[1]
+        self._widths = item[2]
+        self._labels = item[3]
+        self._texts = item[4]
+        self._synsets = item[5]
+        self._num_bboxes = item[6]
+        self._bbox_coords = item[7]
+        self._bbox_labels = item[8]
+
+    @property
+    def images(self):
+        return self._images
+
+    @property
+    def heights(self):
+        return self._heights
+
+    @property
+    def widths(self):
+        return self._widths
+
+    @property
+    def labels(self):
+        return self._labels
+
+    @property
+    def texts(self):
+        return self._texts
+
+    @property
+    def synsets(self):
+        return self._synsets
+
+    @property
+    def num_bboxes(self):
+        return self._num_bboxes
+
+    @property
+    def bbox_coords(self):
+        return self._bbox_coords
+
+    @property
+    def bbox_labels(self):
+        return self._bbox_labels
 
 
 def read_shards(shardnames, preprocessor, batch_size, is_training=False,
-                buffer_size=1500, num_epochs=1):
+                buffer_size=1500, num_epochs=1, max_bboxes=None):
     """Input function which provides batches for train or eval.
 
     The data_dir, batch_size and num_epochs parameters can be overwritten if
@@ -110,6 +162,9 @@ def read_shards(shardnames, preprocessor, batch_size, is_training=False,
         3d tensor and return a 3d tensor.
     batch_size: int
         How big the batch size should be
+    max_bboxes: int
+        Need to pad variable length sequence for bounding boxes. This is the
+        maximum number we'll expect in any one image.
     """
     dataset = tf.data.Dataset.from_tensor_slices(shardnames)
     dataset = dataset.flat_map(tf.data.TFRecordDataset)
@@ -124,15 +179,6 @@ def read_shards(shardnames, preprocessor, batch_size, is_training=False,
     # We call repeat after shuffling, rather than before, to prevent separate
     # epochs from blending together.
     dataset = dataset.repeat(num_epochs)
-    examples = Examples(dataset, batch_size)
+    examples = Examples(dataset, batch_size, max_bboxes)
+
     return examples
-    #  dataset = dataset.padded_batch(batch_size, padded_shapes=(
-        #  [None, None, 3], [None,], [None,], [None, 20], [None,]))
-    #  dataset = dataset.padded_batch(batch_size, ([None, None, 3], [], [], [], [20, 4], [20], []))
-
-    #  iterator = dataset.make_one_shot_iterator()
-    #  images, labels, texts, bbox_labels, bbox_coords = iterator.get_next()
-    #  images, labels, texts, synsets, bbox_coords, bbox_labels, objects = iterator.get_next()
-
-    #  return images, labels, texts, bbox_labels, bbox_coords
-    #  return images, labels, texts, synsets, bbox_coords, bbox_labels, objects
