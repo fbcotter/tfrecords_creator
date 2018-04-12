@@ -324,7 +324,7 @@ def create_tfrecords(name, filenames, texts, labels, text_mappings=None,
     sys.stdout.flush()
 
     if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
+        os.makedirs(output_dir)
 
     # Create a mechanism for monitoring when all threads are finished.
     coord = tf.train.Coordinator()
