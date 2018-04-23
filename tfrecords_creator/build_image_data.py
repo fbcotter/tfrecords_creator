@@ -385,15 +385,26 @@ def find_image_files(data_dir, label_order=None):
     elif isinstance(label_order, dict):
         enumeration = label_order
         special_order = True
+        import operator
+        # Sort the dictionary by values
+        label_order = sorted(enumeration.items(), key=operator.itemgetter(1))
+        label_order = [a[0] for a in label_order]
     else:
         raise ValueError("Unkown parameter type label_order")
 
-    # Make sure each label is a directory
-    for label in label_order:
-        if not os.path.isdir(os.path.join(data_dir, label)):
-            print('{} not found as a directory in the data_dir'.format(label) +
+    # Make sure each label is a directory - drop those that aren't
+    # Below is an order(n) method of doing this (see the discussion here
+    # https://stackoverflow.com/a/8313120/6437741)
+    i = 0
+    keep = [os.path.isdir(os.path.join(data_dir, l)) for l in label_order]
+    for k, l in zip(keep, label_order):
+        if k:
+            label_order[i] = l
+            i += 1
+        else:
+            print('{} not found as a directory in the data_dir'.format(l) +
                   '. Dropping')
-            label_order.remove(label)
+    del label_order[i+1:]
 
     labels = []
     filenames = []
@@ -443,5 +454,9 @@ def find_image_files(data_dir, label_order=None):
 
     print('Found %d JPEG files across %d labels inside %s.' %
           (len(filenames), len(label_order), data_dir))
+
+    # Check the input enumeration matches the output enumeration
+    if special_order:
+        pass
 
     return filenames, texts, labels, enumeration
