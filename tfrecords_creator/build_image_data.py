@@ -404,7 +404,7 @@ def find_image_files(data_dir, label_order=None):
         else:
             print('{} not found as a directory in the data_dir'.format(l) +
                   '. Dropping')
-    del label_order[i+1:]
+    del label_order[i:]
 
     labels = []
     filenames = []
