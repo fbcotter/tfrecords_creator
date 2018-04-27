@@ -125,6 +125,10 @@ class Examples(object):
     def labels(self):
         return self._labels
 
+    @labels.setter
+    def labels(self, labels):
+        self._labels = labels
+
     @property
     def texts(self):
         return self._texts
